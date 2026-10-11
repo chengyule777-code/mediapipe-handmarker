@@ -24,7 +24,9 @@ import template from '../templates/hand-landmarker.html?raw';
 class HandLandmarkerTask extends BaseVisionTask {
   private drawingUtils: DrawingUtils | undefined;
 
-  private numHands = 2;
+  private numHands = 1;
+  // 每200毫秒显示一次坐标，避免Console刷屏
+  private lastPalmLogTime = 0;
   private minHandDetectionConfidence = 0.5;
   private minHandPresenceConfidence = 0.5;
   private minTrackingConfidence = 0.5;
@@ -122,20 +124,71 @@ class HandLandmarkerTask extends BaseVisionTask {
   protected override displayVideoResult(result: HandLandmarkerResult) {
     this.canvasElement.width = this.video.videoWidth;
     this.canvasElement.height = this.video.videoHeight;
-    this.canvasCtx.clearRect(0, 0, this.canvasElement.width, this.canvasElement.height);
 
-    this.canvasCtx.beginPath();
-    this.canvasCtx.rect(0, 0, this.canvasElement.width, this.canvasElement.height);
-    this.canvasCtx.clip();
+    const ctx = this.canvasCtx;
+    const width = this.canvasElement.width;
+    const height = this.canvasElement.height;
 
-    if (result.landmarks) {
-      if (!this.drawingUtils) this.drawingUtils = new DrawingUtils(this.canvasCtx);
-      else this.drawingUtils = new DrawingUtils(this.canvasCtx);
+    ctx.clearRect(0, 0, width, height);
 
-      for (const landmarks of result.landmarks) {
-        this.drawLandmarks(this.drawingUtils, landmarks);
-      }
+    // 保留原来的手部骨架与关键点
+    this.drawingUtils = new DrawingUtils(ctx);
+
+    for (const landmarks of result.landmarks) {
+      this.drawLandmarks(this.drawingUtils, landmarks);
     }
+
+    // 每帧计算掌心位置
+    const palm = this.getPalmPosition(result);
+
+    if (palm) {
+      // 将归一化坐标转换为画布上的像素坐标
+      const pixelX = palm.x * width;
+      const pixelY = palm.y * height;
+
+      // 用一个青色圆点标记掌心
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(pixelX, pixelY, 10, 0, Math.PI * 2);
+      ctx.fillStyle = '#00FFFF';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#000000';
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 只降低日志显示频率；掌心计算仍然每帧执行
+    const now = performance.now();
+
+    if (now - this.lastPalmLogTime >= 200) {
+      console.log('Palm:', {
+        tracked: palm !== null,
+        x: palm?.x ?? null,
+        y: palm?.y ?? null,
+      });
+
+      this.lastPalmLogTime = now;
+    }
+  }
+
+  private getPalmPosition(result: HandLandmarkerResult) {
+    // 取第一只被检测到的手
+    const hand = result.landmarks[0];
+
+    // 当前没有检测到手
+    if (!hand) {
+      return null;
+    }
+
+    // 手腕，以及食指、中指、无名指、小指的根部
+    const ids = [0, 5, 9, 13, 17];
+
+    const x = ids.reduce((sum, id) => sum + hand[id].x, 0) / ids.length;
+
+    const y = ids.reduce((sum, id) => sum + hand[id].y, 0) / ids.length;
+
+    return { x, y };
   }
 
   private drawLandmarks(drawingUtils: DrawingUtils, landmarks: any[]) {
